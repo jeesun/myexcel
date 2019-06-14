@@ -9,23 +9,18 @@ import java.util.Objects;
 
 /**
  * @author simon
- * @version 1.0
- * @date 2019-06-06 15:52
+ * @version 2.5.0
  */
 public class StringWriteConverter implements WriteConverter {
+
+    @Override
+    public boolean support(Field field, Object fieldVal) {
+        ExcelColumn excelColumn = field.getAnnotation(ExcelColumn.class);
+        return Objects.nonNull(excelColumn) && Objects.nonNull(fieldVal) && excelColumn.convertToString();
+    }
+
     @Override
     public Pair<Class, Object> convert(Field field, Object fieldVal) {
-        Class<?> fieldType = field.getType();
-
-        ExcelColumn excelColumn = field.getAnnotation(ExcelColumn.class);
-        if (Objects.isNull(excelColumn) || Objects.isNull(fieldVal)) {
-            return Pair.of(fieldType, fieldVal);
-        }
-
-        boolean convertToString = excelColumn.convertToString();
-        if (convertToString) {
-            return Pair.of(String.class, fieldVal.toString());
-        }
-        return Pair.of(fieldType, fieldVal);
+        return Pair.of(String.class, fieldVal.toString());
     }
 }
