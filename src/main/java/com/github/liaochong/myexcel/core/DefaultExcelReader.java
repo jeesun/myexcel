@@ -14,7 +14,7 @@
  */
 package com.github.liaochong.myexcel.core;
 
-import com.github.liaochong.myexcel.core.container.ParallelContainer;
+import com.github.liaochong.myexcel.core.constant.Constants;
 import com.github.liaochong.myexcel.core.converter.ReadConverterContext;
 import com.github.liaochong.myexcel.utils.ReflectUtil;
 import com.github.liaochong.myexcel.utils.StringUtil;
@@ -32,15 +32,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /**
  * @author liaochong
@@ -59,7 +56,7 @@ public class DefaultExcelReader<T> {
 
     private Predicate<T> beanFilter = bean -> true;
 
-    private boolean parallelRead;
+    private Workbook wb;
 
     private DefaultExcelReader(Class<T> dataType) {
         this.dataType = dataType;
@@ -88,11 +85,6 @@ public class DefaultExcelReader<T> {
         return this;
     }
 
-    public DefaultExcelReader<T> parallelRead() {
-        this.parallelRead = true;
-        return this;
-    }
-
     public List<T> read(@NonNull InputStream fileInputStream) throws Exception {
         return this.read(fileInputStream, null);
     }
@@ -102,8 +94,14 @@ public class DefaultExcelReader<T> {
         if (fieldMap.isEmpty()) {
             return Collections.emptyList();
         }
-        Sheet sheet = getSheetOfInputStream(fileInputStream, password);
-        return getDataFromFile(sheet, fieldMap);
+        try {
+            Sheet sheet = getSheetOfInputStream(fileInputStream, password);
+            return getDataFromFile(sheet, fieldMap);
+        } finally {
+            if (Objects.nonNull(wb)) {
+                wb.close();
+            }
+        }
     }
 
     public List<T> read(@NonNull File file) throws Exception {
@@ -111,15 +109,21 @@ public class DefaultExcelReader<T> {
     }
 
     public List<T> read(@NonNull File file, String password) throws Exception {
-        if (!file.getName().endsWith(".xlsx") && !file.getName().endsWith(".xls")) {
+        if (!file.getName().endsWith(Constants.XLSX) && !file.getName().endsWith(Constants.XLS)) {
             throw new IllegalArgumentException("Support only. xls and. xlsx suffix files");
         }
         Map<Integer, Field> fieldMap = ReflectUtil.getFieldMapOfExcelColumn(dataType);
         if (fieldMap.isEmpty()) {
             return Collections.emptyList();
         }
-        Sheet sheet = getSheetOfFile(file, password);
-        return getDataFromFile(sheet, fieldMap);
+        try {
+            Sheet sheet = getSheetOfFile(file, password);
+            return getDataFromFile(sheet, fieldMap);
+        } finally {
+            if (Objects.nonNull(wb)) {
+                wb.close();
+            }
+        }
     }
 
     public void readThen(@NonNull InputStream fileInputStream, Consumer<T> consumer) throws Exception {
@@ -131,8 +135,14 @@ public class DefaultExcelReader<T> {
         if (fieldMap.isEmpty()) {
             return;
         }
-        Sheet sheet = getSheetOfInputStream(fileInputStream, password);
-        readThenConsume(sheet, fieldMap, consumer);
+        try {
+            Sheet sheet = getSheetOfInputStream(fileInputStream, password);
+            readThenConsume(sheet, fieldMap, consumer);
+        } finally {
+            if (Objects.nonNull(wb)) {
+                wb.close();
+            }
+        }
     }
 
 
@@ -148,12 +158,17 @@ public class DefaultExcelReader<T> {
         if (fieldMap.isEmpty()) {
             return;
         }
-        Sheet sheet = getSheetOfFile(file, password);
-        readThenConsume(sheet, fieldMap, consumer);
+        try {
+            Sheet sheet = getSheetOfFile(file, password);
+            readThenConsume(sheet, fieldMap, consumer);
+        } finally {
+            if (Objects.nonNull(wb)) {
+                wb.close();
+            }
+        }
     }
 
     private Sheet getSheetOfInputStream(@NonNull InputStream fileInputStream, String password) throws IOException {
-        Workbook wb;
         if (StringUtil.isBlank(password)) {
             wb = WorkbookFactory.create(fileInputStream);
         } else {
@@ -163,7 +178,6 @@ public class DefaultExcelReader<T> {
     }
 
     private Sheet getSheetOfFile(@NonNull File file, String password) throws IOException {
-        Workbook wb;
         if (StringUtil.isBlank(password)) {
             wb = WorkbookFactory.create(file);
         } else {
@@ -182,55 +196,29 @@ public class DefaultExcelReader<T> {
             return Collections.emptyList();
         }
         DataFormatter formatter = new DataFormatter();
-        if (parallelRead) {
-            List<ParallelContainer<T>> result = IntStream.rangeClosed(firstRowNum, lastRowNum).parallel().mapToObj(rowNum -> {
-                Row row = sheet.getRow(rowNum);
-                if (Objects.isNull(row)) {
-                    log.info("Row of {} is null,it will be ignored.", rowNum);
-                    return null;
-                }
-                boolean noMatchResult = rowFilter.negate().test(row);
-                if (noMatchResult) {
-                    log.info("Row of {} does not meet the filtering criteria, it will be ignored.", rowNum);
-                    return null;
-                }
-                int lastColNum = row.getLastCellNum();
-                if (lastColNum < 0) {
-                    return null;
-                }
-                T obj = instanceObj(fieldMap, formatter, row);
-                if (!beanFilter.test(obj)) {
-                    return null;
-                }
-                return new ParallelContainer<>(rowNum, obj);
-            }).filter(Objects::nonNull).collect(Collectors.toList());
-            log.info("Reading excel takes {} milliseconds", System.currentTimeMillis() - startTime);
-            return result.stream().sorted(Comparator.comparing(ParallelContainer::getIndex)).map(ParallelContainer::getData).collect(Collectors.toList());
-        } else {
-            List<T> result = new LinkedList<>();
-            for (int i = firstRowNum; i <= lastRowNum; i++) {
-                Row row = sheet.getRow(i);
-                if (Objects.isNull(row)) {
-                    log.info("Row of {} is null,it will be ignored.", i);
-                    continue;
-                }
-                boolean noMatchResult = rowFilter.negate().test(row);
-                if (noMatchResult) {
-                    log.info("Row of {} does not meet the filtering criteria, it will be ignored.", i);
-                    continue;
-                }
-                int lastColNum = row.getLastCellNum();
-                if (lastColNum < 0) {
-                    continue;
-                }
-                T obj = instanceObj(fieldMap, formatter, row);
-                if (beanFilter.test(obj)) {
-                    result.add(obj);
-                }
+        List<T> result = new LinkedList<>();
+        for (int i = firstRowNum; i <= lastRowNum; i++) {
+            Row row = sheet.getRow(i);
+            if (Objects.isNull(row)) {
+                log.info("Row of {} is null,it will be ignored.", i);
+                continue;
             }
-            log.info("Reading excel takes {} milliseconds", System.currentTimeMillis() - startTime);
-            return result;
+            boolean noMatchResult = rowFilter.negate().test(row);
+            if (noMatchResult) {
+                log.info("Row of {} does not meet the filtering criteria, it will be ignored.", i);
+                continue;
+            }
+            int lastColNum = row.getLastCellNum();
+            if (lastColNum < 0) {
+                continue;
+            }
+            T obj = instanceObj(fieldMap, formatter, row);
+            if (beanFilter.test(obj)) {
+                result.add(obj);
+            }
         }
+        log.info("Reading excel takes {} milliseconds", System.currentTimeMillis() - startTime);
+        return result;
     }
 
     private void readThenConsume(Sheet sheet, Map<Integer, Field> fieldMap, Consumer<T> consumer) {
